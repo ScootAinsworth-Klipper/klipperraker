@@ -1986,7 +1986,7 @@ async function checkForAppUpdate(isManual = false) {
       return;
     }
     const release = await res.json();
-    const tagName = (release.tag_name || "").replace(/^v/, "");
+    const tagName = (release.tag_name || "").replace(/^[^0-9]*/, "");
     const apkAsset = (release.assets || []).find(a => a.name && a.name.endsWith(".apk"));
     if (!apkAsset || !apkAsset.browser_download_url) {
       if (isManual) showToast("Latest release has no APK attached.");
