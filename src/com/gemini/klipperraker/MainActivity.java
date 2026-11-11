@@ -256,6 +256,24 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        if (webView != null) {
+            webView.evaluateJavascript("window.onAppBackground && window.onAppBackground();", null);
+            webView.onPause();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.evaluateJavascript("window.onAppForeground && window.onAppForeground();", null);
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         if (networkCallback != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

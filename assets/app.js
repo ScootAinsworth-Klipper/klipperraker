@@ -54,13 +54,85 @@ let machineFilesCache = [];
 let editingFileRoot = "config";
 let editingFilePath = "";
 
+/* BATTERY & BACKGROUND OPTIMIZATIONS */
+let pollActiveTimer = null;
+let pollFarmTimer = null;
+let isAppSuspended = false;
+
+function startPollingTimers() {
+  stopPollingTimers();
+  pollActiveTimer = setInterval(pollActivePrinter, 1600);
+  pollFarmTimer = setInterval(pollFarmPrinters, 6000);
+}
+
+function stopPollingTimers() {
+  if (pollActiveTimer) {
+    clearInterval(pollActiveTimer);
+    pollActiveTimer = null;
+  }
+  if (pollFarmTimer) {
+    clearInterval(pollFarmTimer);
+    pollFarmTimer = null;
+  }
+}
+
+function handleAppBackground() {
+  if (isAppSuspended) return;
+  isAppSuspended = true;
+
+  // 1. Halt high-frequency foreground polling immediately
+  stopPollingTimers();
+
+  // 2. Kill video / snapshot streams immediately so they don't consume bandwidth or battery
+  if (snapTimer) {
+    clearInterval(snapTimer);
+    snapTimer = null;
+  }
+  const imgEl = document.getElementById("camStream");
+  if (imgEl) {
+    imgEl.src = ""; // Closes open multipart MJPEG connection
+  }
+  if (pcWebrtc) {
+    try { pcWebrtc.close(); } catch (e) {}
+    pcWebrtc = null;
+  }
+  const videoEl = document.getElementById("camWebrtc");
+  if (videoEl) {
+    videoEl.srcObject = null;
+  }
+}
+
+function handleAppForeground() {
+  if (!isAppSuspended) return;
+  isAppSuspended = false;
+
+  // 1. Re-fetch printer telemetry once immediately
+  pollActivePrinter();
+  pollFarmPrinters();
+
+  // 2. Resume regular UI polling intervals
+  startPollingTimers();
+
+  // 3. Resume live camera stream
+  updateCamSource();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    handleAppBackground();
+  } else {
+    handleAppForeground();
+  }
+});
+window.onAppBackground = handleAppBackground;
+window.onAppForeground = handleAppForeground;
+
 function initApp() {
   loadPrinters();
   renderPrinterPills();
   selectPrinter(0);
 
-  setInterval(pollActivePrinter, 1600);
-  setInterval(pollFarmPrinters, 6000);
+  startPollingTimers();
   setTimeout(pollFarmPrinters, 600);
 }
 
