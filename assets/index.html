@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Klipperraker Pro</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span>⚡ Klipperraker Pro</span>
+    </div>
+    <div class="printer-pills" id="printerPills"></div>
+    <div class="top-actions">
+      <button class="btn" onclick="forceReconnectAll()" title="Reconnect / Refresh">🔄 Reconnect</button>
+      <button class="btn" id="btnLedToggle" onclick="toggleChamberLed()" title="Toggle Printer LED">💡 LED</button>
+      <button class="btn" onclick="openPrinterModal()">➕ Printer</button>
+      <button class="btn btn-estop" onclick="confirmEmergencyStop()">🛑 E-STOP</button>
+    </div>
+  </header>
+
+  <!-- Printer Status / Alert Banner (Offline or Klipper Shutdown) -->
+  <div id="printerAlertBanner" style="display:none; background:#7f1d1d; border-bottom:1px solid #ef4444; padding:8px 14px; font-size:13px; align-items:center; justify-content:space-between; gap:10px;">
+    <div id="printerAlertText" style="color:#fecaca; font-weight:600; white-space:pre-line;"></div>
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+      <button class="btn" style="background:#991b1b; border-color:#f87171;" onclick="safeRestartFirmware()">🔄 Firmware Restart</button>
+      <button class="btn" style="background:#991b1b; border-color:#f87171;" onclick="safeRestartKlipper()">🔄 Klipper Restart</button>
+    </div>
+  </div>
+
+  <!-- Main Scrollable Content -->
+  <main class="main-content" id="mainContent">
+    <div id="pullToRefreshBanner" style="display:none; text-align:center; padding:10px; font-size:12px; font-weight:600; color:var(--accent); background:rgba(14,165,233,0.1); border-bottom:1px solid rgba(14,165,233,0.2); transition:all 0.2s ease;">
+      <span id="pullRefreshIcon">⬇️</span> <span id="pullRefreshText">Pull down to reconnect...</span>
+    </div>
+    <!-- TAB 1: DASHBOARD -->
+    <section class="tab-pane active" id="tab-dashboard">
+      <div class="dashboard-grid">
+        <!-- Webcam Card -->
+        <div class="card" id="webcamCard">
+          <div class="card-header" style="flex-wrap:wrap; gap:6px;">
+            <div class="card-title">
+              📹 Live Webcam
+              <span class="badge" id="camModeBadge">MJPEG</span>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <div id="multiCamButtons" style="display:flex; gap:4px;"></div>
+              <button class="btn" id="btnWebrtcMode" onclick="setCameraMode('webrtc')">WebRTC</button>
+              <button class="btn" onclick="setCameraMode('mjpeg')">MJPEG</button>
+              <button class="btn" onclick="setCameraMode('snapshot')">Snap</button>
+              <button class="btn" onclick="toggleFullscreenCam()">⛶</button>
+            </div>
+          </div>
+          <div class="camera-container" id="camContainer">
+            <!-- Fullscreen Top Floating Bar -->
+            <div class="cam-fs-topbar">
+              <div class="cam-fs-pill" id="camFsTelemetry">My K2 • Live Stream</div>
+              <div style="display:flex; gap:8px; pointer-events:auto;">
+                <button class="btn" style="background:rgba(15,23,42,0.85); padding:9px 14px;" onclick="toggleChamberLed()">💡 LED</button>
+                <button class="btn-fs-exit" onclick="toggleFullscreenCam(false)">↙ Exit Fullscreen</button>
+              </div>
+            </div>
+
+            <video id="webrtcVideo" autoplay muted playsinline webkit-playsinline style="display:none;" ondblclick="toggleFullscreenCam()"></video>
+            <img id="mjpegImg" alt="Printer Camera Stream" style="display:none;" ondblclick="toggleFullscreenCam()" />
+            <div id="camEmptyState" style="color:var(--text-muted); font-size:13px; text-align:center; padding:20px;">
+              Connecting to camera...
+            </div>
+            <div class="cam-overlay">
+              <span class="cam-tag" id="camOverlayInfo">Connecting camera...</span>
+              <div style="display:flex; gap:6px; pointer-events:auto;">
+                <button class="cam-tag" style="border:1px solid var(--border); cursor:pointer;" onclick="reloadCamera()">🔄 Refresh</button>
+                <button class="cam-tag" id="btnOverlayFsToggle" style="border:1px solid var(--accent); cursor:pointer; font-weight:700;" onclick="toggleFullscreenCam()">⛶ Fullscreen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Print Status & Progress Card -->
+        <div class="card" id="jobCard">
+          <div class="card-header">
+            <div class="card-title">🖨️ <span id="activePrinterTitle">Print Job & Telemetry</span></div>
+            <span class="badge" id="printerStateBadge">CONNECTING</span>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="jobFilename">No file loaded</div>
+            <div style="font-weight:800; font-size:18px; color:var(--accent);" id="jobPercent">0.0%</div>
+          </div>
+
+          <div class="progress-wrap">
+            <div class="progress-fill" id="jobProgressBar"></div>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat-box">
+              <div class="stat-label">Layer</div>
+              <div class="stat-val" id="statLayer">0 / 0</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Elapsed / ETA</div>
+              <div class="stat-val" id="statTime">00:00 / --:--</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Z Height</div>
+              <div class="stat-val" id="statZSpeed">Z 0.00mm</div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-warning" style="flex:1;" onclick="safePausePrint()">⏸ Pause</button>
+            <button class="btn btn-success" style="flex:1;" onclick="safeResumePrint()">▶ Resume</button>
+            <button class="btn btn-danger" style="flex:1;" onclick="confirmCancelPrint()">✖ Cancel</button>
+            <button class="btn" onclick="safeRestartFirmware()">🔄 Restart FW</button>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-header">
+              <span>⚡ Print Speed Factor</span>
+              <span id="speedFactorVal">100%</span>
+            </div>
+            <input type="range" min="20" max="200" value="100" id="speedSlider" onchange="setSpeedFactor(this.value)" oninput="document.getElementById('speedFactorVal').innerText=this.value+'%'" />
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-header">
+              <span>💧 Extrusion Flow Factor</span>
+              <span id="flowFactorVal">100%</span>
+            </div>
+            <input type="range" min="50" max="150" value="100" id="flowSlider" onchange="setFlowFactor(this.value)" oninput="document.getElementById('flowFactorVal').innerText=this.value+'%'" />
+          </div>
+        </div>
+
+        <!-- Temperatures & Live Graph Card -->
+        <div class="card" id="tempCard">
+          <div class="card-header">
+            <div class="card-title">🌡️ Temperatures & Sensors <span class="badge" id="printGuardBadge" style="display:none; background:rgba(234,179,8,0.2); color:#facc15;">🔒 PRINT GUARD ON</span></div>
+            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="cooldownAll()">❄️ Cooldown</button>
+          </div>
+
+          <div class="preset-chips">
+            <span class="chip" onclick="applyPreset(215, 60, 0, 'PLA 215/60°C')">PLA (215/60)</span>
+            <span class="chip" onclick="applyPreset(240, 75, 0, 'PETG 240/75°C')">PETG (240/75)</span>
+            <span class="chip" onclick="applyPreset(260, 100, 50, 'ABS 260/100°C')">ABS (260/100)</span>
+            <span class="chip" onclick="applyPreset(265, 100, 55, 'ASA 265/100°C')">ASA (265/100)</span>
+            <span class="chip" onclick="applyPreset(220, 45, 0, 'TPU 220/45°C')">TPU (220/45)</span>
+          </div>
+
+          <!-- Extruder Row -->
+          <div class="temp-row">
+            <div>
+              <div style="font-weight:700; color:#f97316;">🔥 Nozzle</div>
+              <div style="font-size:11px; color:var(--text-muted);" id="nozPowerText">Power: 0%</div>
+            </div>
+            <div style="font-size:15px; font-weight:800;" id="nozTempText">--°C / 0°C</div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="nozTargetInput" placeholder="215" min="0" max="320" />
+              <button class="btn btn-primary" onclick="setNozzleTemp()">Set</button>
+            </div>
+          </div>
+
+          <!-- Heated Bed Row -->
+          <div class="temp-row">
+            <div>
+              <div style="font-weight:700; color:#38bdf8;">🛏️ Heated Bed</div>
+              <div style="font-size:11px; color:var(--text-muted);" id="bedPowerText">Power: 0%</div>
+            </div>
+            <div style="font-size:15px; font-weight:800;" id="bedTempText">--°C / 0°C</div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="bedTargetInput" placeholder="60" min="0" max="130" />
+              <button class="btn btn-primary" onclick="setBedTemp()">Set</button>
+            </div>
+          </div>
+
+          <!-- Extra Sensors Row -->
+          <div class="stat-grid">
+            <div class="stat-box">
+              <div class="stat-label" id="sensor1Label">Chamber / Host</div>
+              <div class="stat-val" id="sensorChamber">-- °C</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label" id="sensor2Label">MCU Temp</div>
+              <div class="stat-val" id="sensorMcu">-- °C</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label" id="sensor3Label">Aux Sensor</div>
+              <div class="stat-val" id="sensorCfs">--</div>
+            </div>
+          </div>
+
+          <canvas id="tempChart" width="420" height="115" style="width:100%; height:115px; background:#050811; border-radius:8px; border:1px solid var(--border);"></canvas>
+        </div>
+
+        <!-- CFS Multi-Color Box & Filament Card (Only shown on printers with CFS) -->
+        <div class="card" id="cfsCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">🎨 CFS Multi-Color System & Spool</div>
+            <span class="badge" id="cfsStateBadge">READY</span>
+          </div>
+
+          <div class="cfs-slots" id="cfsSlotsContainer"></div>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
+            <button class="btn" style="flex:1;" onclick="safeGcodeAction('BOX_INFO_REFRESH', 'Refresh CFS Box Info')">🔄 Refresh CFS</button>
+            <button class="btn btn-primary" style="flex:1;" onclick="safeGcodeAction('LOAD_MATERIAL', 'Load Filament')">📥 Load Filament</button>
+            <button class="btn btn-warning" style="flex:1;" onclick="safeGcodeAction('QUIT_MATERIAL', 'Unload Filament')">📤 Unload Filament</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: MOTION, FANS & EXCLUDE OBJECTS -->
+    <section class="tab-pane" id="tab-motion">
+      <div class="dashboard-grid">
+        <!-- Toolhead Jog & Homing Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">🧭 Toolhead Motion & Homing</div>
+            <span class="badge" id="homedAxesBadge">HOMED: NONE</span>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat-box"><div class="stat-label">X Pos</div><div class="stat-val" id="posX">0.00</div></div>
+            <div class="stat-box"><div class="stat-label">Y Pos</div><div class="stat-val" id="posY">0.00</div></div>
+            <div class="stat-box"><div class="stat-label">Z Pos</div><div class="stat-val" id="posZ">0.00</div></div>
+          </div>
+
+          <div class="jog-layout">
+            <div class="xy-pad">
+              <div></div>
+              <button class="jog-btn" onclick="jogAxis('Y', 1)">▲<span>+Y</span></button>
+              <div></div>
+              <button class="jog-btn" onclick="jogAxis('X', -1)">◀<span>-X</span></button>
+              <button class="jog-btn btn-primary" onclick="safeGcodeAction('G28', 'Home All Axes (G28)')">🏠<span>All</span></button>
+              <button class="jog-btn" onclick="jogAxis('X', 1)">▶<span>+X</span></button>
+              <div></div>
+              <button class="jog-btn" onclick="jogAxis('Y', -1)">▼<span>-Y</span></button>
+              <div></div>
+            </div>
+
+            <div class="z-pad">
+              <button class="jog-btn" onclick="jogAxis('Z', -1)">▲ Z-<span>Up/Noz</span></button>
+              <button class="jog-btn" onclick="safeGcodeAction('G28 Z', 'Home Z Axis (G28 Z)')">🏠 Home Z</button>
+              <button class="jog-btn" onclick="jogAxis('Z', 1)">▼ Z+<span>Down</span></button>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+            <span style="font-size:12px; color:var(--text-muted);">Step (mm):</span>
+            <div class="preset-chips" id="stepChips">
+              <span class="chip" onclick="setJogStep(0.1, this)">0.1</span>
+              <span class="chip" onclick="setJogStep(1, this)">1</span>
+              <span class="chip" style="border-color:var(--accent);" onclick="setJogStep(10, this)">10</span>
+              <span class="chip" onclick="setJogStep(50, this)">50</span>
+              <span class="chip" onclick="setJogStep(100, this)">100</span>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn" style="flex:1;" onclick="safeGcodeAction('G28 X', 'Home X Axis (G28 X)')">Home X</button>
+            <button class="btn" style="flex:1;" onclick="safeGcodeAction('G28 Y', 'Home Y Axis (G28 Y)')">Home Y</button>
+            <button class="btn btn-warning" style="flex:1;" onclick="safeGcodeAction('M84', 'Disable Stepper Motors (M84)')">🔓 Motors Off</button>
+          </div>
+        </div>
+
+        <!-- Extruder & Z-Offset Babystepping -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">⚙️ Extruder & Z-Offset Babystepping</div>
+            <span class="badge" id="canExtrudeBadge">COLD</span>
+          </div>
+
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span style="font-size:12px; color:var(--text-muted);">Amount (mm):</span>
+            <input type="number" class="temp-input" id="extrudeLenInput" value="10" min="1" max="200" />
+            <button class="btn btn-primary" style="flex:1;" onclick="extrudeFilament(1)">⬇ Extrude</button>
+            <button class="btn" style="flex:1;" onclick="extrudeFilament(-1)">⬆ Retract</button>
+          </div>
+
+          <div class="card-header" style="margin-top:6px;">
+            <div class="card-title">📏 Z-Offset Fine Tuning</div>
+            <span class="badge" id="zOffsetBadge">0.000 mm</span>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px;">
+            <button class="btn" onclick="adjustZOffset(-0.05)">-0.05</button>
+            <button class="btn" onclick="adjustZOffset(-0.01)">-0.01</button>
+            <button class="btn" onclick="adjustZOffset(0.01)">+0.01</button>
+            <button class="btn" onclick="adjustZOffset(0.05)">+0.05</button>
+          </div>
+
+          <div class="card-header" style="margin-top:6px;">
+            <div class="card-title">🌀 Fans & Output Pins</div>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-header"><span>Part Cooling Fan</span><span id="fan0Val">0%</span></div>
+            <input type="range" min="0" max="100" value="0" id="fan0Slider" onchange="setFanPin('fan0', this.value)" oninput="document.getElementById('fan0Val').innerText=this.value+'%'" />
+          </div>
+          <div class="slider-row" id="fan2Row">
+            <div class="slider-header"><span>Aux / Side Fan (fan2)</span><span id="fan2Val">0%</span></div>
+            <input type="range" min="0" max="100" value="0" id="fan2Slider" onchange="setFanPin('fan2', this.value)" oninput="document.getElementById('fan2Val').innerText=this.value+'%'" />
+          </div>
+          <div class="slider-row" id="fan1Row">
+            <div class="slider-header"><span>Exhaust / Back Fan (fan1)</span><span id="fan1Val">0%</span></div>
+            <input type="range" min="0" max="100" value="0" id="fan1Slider" onchange="setFanPin('fan1', this.value)" oninput="document.getElementById('fan1Val').innerText=this.value+'%'" />
+          </div>
+        </div>
+
+        <!-- Exclude Object Interactive Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">🎯 Exclude Objects (Cancel Single Part)</div>
+            <span class="badge" id="excludeCountBadge">0 OBJECTS</span>
+          </div>
+          <canvas id="excludeCanvas" width="320" height="220" style="width:100%; height:200px; background:#050811; border-radius:8px; border:1px solid var(--border);"></canvas>
+          <div id="excludeObjectList" style="display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;">
+            <div style="color:var(--text-muted); font-size:12px;">No multi-object metadata active in current job.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: MACROS & G-CODE CONSOLE -->
+    <section class="tab-pane" id="tab-macros">
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">💻 Live G-Code Console</div>
+            <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="refreshGcodeStore()">🔄 Sync</button>
+          </div>
+          <div class="console-box" id="consoleBox"></div>
+          <div style="display:flex; gap:6px;">
+            <input type="text" class="form-input" style="flex:1; text-transform:uppercase;" id="gcodeInput" placeholder="Enter G-code (e.g. G28, M106 S255)..." onkeydown="if(event.key==='Enter') sendConsoleCommand()" />
+            <button class="btn btn-primary" onclick="sendConsoleCommand()">Send</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">⚡ Klipper G-Code Macros <span class="badge" id="macroCountBadge">0</span></div>
+            <input type="text" class="form-input" style="width:180px; padding:5px 10px; font-size:12px;" placeholder="Filter macros..." oninput="renderMacros(this.value)" />
+          </div>
+          <div class="macro-grid" id="macroGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: G-CODE FILES & TIMELAPSES -->
+    <section class="tab-pane" id="tab-files">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button class="btn btn-primary" id="btnSubtabGcodes" style="flex:1; padding:10px;" onclick="switchFilesSubtab('gcodes')">📄 G-Code Print Files</button>
+        <button class="btn" id="btnSubtabTimelapses" style="flex:1; padding:10px;" onclick="switchFilesSubtab('timelapses')">🎬 Timelapse Videos <span class="badge" id="timelapseCountBadge">0</span></button>
+      </div>
+
+      <!-- G-Code Files Card -->
+      <div class="card" id="gcodesCard">
+        <div class="card-header" style="flex-wrap:wrap; gap:6px;">
+          <div class="card-title">📁 Printer G-Code Files</div>
+          <div style="display:flex; gap:8px;">
+            <label class="btn btn-primary" style="cursor:pointer;">
+              📤 Upload .gcode
+              <input type="file" accept=".gcode,.gco,.ufp" style="display:none;" onchange="uploadGcodeFile(this)" />
+            </label>
+            <button class="btn" onclick="loadGcodeFiles()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="file-list" id="fileListContainer">
+          <div style="color:var(--text-muted);">Loading G-code files...</div>
+        </div>
+      </div>
+
+      <!-- Timelapses Card -->
+      <div class="card" id="timelapsesCard" style="display:none;">
+        <div class="card-header" style="flex-wrap:wrap; gap:6px;">
+          <div class="card-title">🎬 Recorded Print Timelapses</div>
+          <button class="btn" onclick="loadTimelapses()">🔄 Refresh Timelapses</button>
+        </div>
+        <div class="file-list" id="timelapseListContainer">
+          <div style="color:var(--text-muted);">Loading timelapses...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: MAINSAIL MACHINE, CONFIG FILES, KLIPPER SETTINGS & SOFTWARE UPDATES -->
+    <section class="tab-pane" id="tab-machine">
+      <div class="dashboard-grid">
+        <!-- Card 1: Config & Log Files Browser + Editor -->
+        <div class="card">
+          <div class="card-header" style="flex-wrap:wrap; gap:6px;">
+            <div class="card-title">📝 Config & Log Files</div>
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-primary" id="btnRootConfig" onclick="loadMachineFiles('config')">config</button>
+              <button class="btn" id="btnRootLogs" onclick="loadMachineFiles('logs')">logs</button>
+              <button class="btn" onclick="createNewConfigFile()">➕ New</button>
+            </div>
+          </div>
+          <input type="text" class="form-input" style="padding:5px 8px; font-size:12px;" placeholder="Filter config / log files (e.g. printer.cfg)..." oninput="renderMachineFiles(this.value)" />
+          <div class="file-list" id="machineFileList" style="max-height:360px; overflow-y:auto;">
+            <div style="color:var(--text-muted);">Select a root folder to view files...</div>
+          </div>
+        </div>
+
+        <!-- Card 2: Klipper Machine Settings & Velocity Limits -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">⚙️ Klipper Machine Limits & PA</div>
+            <button class="btn btn-primary" style="padding:4px 8px; font-size:11px;" onclick="safeGcodeAction('SAVE_CONFIG', 'Save Config & Restart Klipper (SAVE_CONFIG)')">💾 SAVE_CONFIG</button>
+          </div>
+
+          <div class="kv-row">
+            <div>
+              <div style="font-weight:700;">Max Velocity (mm/s)</div>
+              <div style="font-size:11px; color:var(--text-muted);">SET_VELOCITY_LIMIT VELOCITY</div>
+            </div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="inpMaxVel" value="500" />
+              <button class="btn btn-primary" onclick="applyMachineLimit('VELOCITY', 'inpMaxVel')">Apply</button>
+            </div>
+          </div>
+
+          <div class="kv-row">
+            <div>
+              <div style="font-weight:700;">Max Accel (mm/s²)</div>
+              <div style="font-size:11px; color:var(--text-muted);">SET_VELOCITY_LIMIT ACCEL</div>
+            </div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="inpMaxAccel" value="5000" />
+              <button class="btn btn-primary" onclick="applyMachineLimit('ACCEL', 'inpMaxAccel')">Apply</button>
+            </div>
+          </div>
+
+          <div class="kv-row">
+            <div>
+              <div style="font-weight:700;">Square Corner Vel (mm/s)</div>
+              <div style="font-size:11px; color:var(--text-muted);">SQUARE_CORNER_VELOCITY</div>
+            </div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="inpSqCorner" step="0.5" value="5.0" />
+              <button class="btn btn-primary" onclick="applyMachineLimit('SQUARE_CORNER_VELOCITY', 'inpSqCorner')">Apply</button>
+            </div>
+          </div>
+
+          <div class="kv-row">
+            <div>
+              <div style="font-weight:700;">Pressure Advance</div>
+              <div style="font-size:11px; color:var(--text-muted);">SET_PRESSURE_ADVANCE</div>
+            </div>
+            <div class="temp-input-group">
+              <input type="number" class="temp-input" id="inpPressureAdv" step="0.002" value="0.040" />
+              <button class="btn btn-primary" onclick="applyPressureAdvance()">Apply</button>
+            </div>
+          </div>
+
+          <div class="stat-grid" style="margin-top:4px;">
+            <div class="stat-box">
+              <div class="stat-label">Hostname</div>
+              <div class="stat-val" id="sysHostname">--</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Klipper Ver</div>
+              <div class="stat-val" id="sysKlipperVer" style="font-size:11px;">--</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">CPU / Mem</div>
+              <div class="stat-val" id="sysCpuMem" style="font-size:12px;">--</div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn" style="flex:1;" onclick="safeRestartFirmware()">🔄 Firmware Restart</button>
+            <button class="btn" style="flex:1;" onclick="safeRestartKlipper()">🔄 Klipper Restart</button>
+            <button class="btn btn-warning" style="flex:1;" onclick="rebootPrinterHost()">⚡ Reboot Host</button>
+          </div>
+        </div>
+
+        <!-- Card 3: Moonraker Software Update Manager -->
+        <div class="card">
+          <div class="card-header" style="flex-wrap:wrap; gap:6px;">
+            <div class="card-title">🔄 Software Update Manager</div>
+            <div style="display:flex; gap:6px;">
+              <button class="btn" onclick="loadUpdateStatus(true)">🔍 Check Updates</button>
+              <button class="btn btn-primary" onclick="triggerSoftwareUpdate('full', 'All Packages')">⬆️ Update All</button>
+            </div>
+          </div>
+          <div class="file-list" id="updateManagerList" style="max-height:360px; overflow-y:auto;">
+            <div style="color:var(--text-muted);">Loading software versions...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: MULTI-PRINTER FARM & SETTINGS -->
+    <section class="tab-pane" id="tab-farm">
+      <div class="dashboard-grid" id="farmGrid"></div>
+
+      <div class="card" style="margin-top:12px;">
+        <div class="card-header">
+          <div class="card-title">🔔 Tablet Notifications & Display Settings</div>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+          <button class="btn btn-primary" id="btnToggleBgMonitor" onclick="toggleBgMonitor()">🔔 Background Print Monitor: ON</button>
+          <button class="btn" onclick="testTabletNotification()">📣 Send Test Alert</button>
+          <button class="btn" onclick="openPrinterModal()">➕ Add / Edit Printers</button>
+        </div>
+        <div class="kv-row" style="margin-top:8px;">
+          <div>
+            <div style="font-weight:700;">🔒 WG Tunnel Local SOCKS5 Port</div>
+            <div style="font-size:11px; color:var(--text-muted);">Auto-routes 192.168.1.x through 127.0.0.1 when WG Tunnel Proxy is ON (works alongside AdGuard!)</div>
+          </div>
+          <div class="temp-input-group">
+            <input type="number" class="temp-input" id="inpSocksPort" style="width:76px;" value="25344" />
+            <button class="btn btn-primary" onclick="saveSocksPort()">Save</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom Tab Navigation -->
+  <nav class="bottom-nav">
+    <div class="nav-item active" onclick="switchTab('dashboard', this)">
+      <span>📊</span><span>Dashboard</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('motion', this)">
+      <span>🧭</span><span>Motion & Fans</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('macros', this)">
+      <span>⚡</span><span>Macros & CLI</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('files', this)">
+      <span>🎬</span><span>Files & Clips</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('machine', this)">
+      <span>⚙️</span><span>Machine</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('farm', this)">
+      <span>🏭</span><span>Printer Farm</span>
+    </div>
+  </nav>
+
+  <!-- Timelapse Video Player Modal -->
+  <div class="modal-backdrop" id="timelapsePlayerModal">
+    <div class="modal-card" style="max-width:720px;">
+      <div class="card-header">
+        <div class="card-title" id="tlPlayerTitle">🎬 Timelapse Player</div>
+        <button class="btn" onclick="closeTimelapsePlayer()">✖</button>
+      </div>
+      <video id="tlPlayerVideo" controls autoplay playsinline style="width:100%; max-height:62vh; background:#000; border-radius:8px; border:1px solid var(--border);"></video>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span style="font-size:12px; color:var(--text-muted);" id="tlPlayerMeta"></span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" onclick="closeTimelapsePlayer()">Close</button>
+          <button class="btn btn-primary" id="btnModalDownloadTl">⬇ Save MP4 to Device</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config / Log File Editor Modal -->
+  <div class="modal-backdrop" id="configEditorModal">
+    <div class="modal-card" style="max-width:780px;">
+      <div class="card-header">
+        <div class="card-title" id="editorFileTitle">📝 printer.cfg</div>
+        <button class="btn" onclick="closeConfigEditor()">✖</button>
+      </div>
+      <textarea class="code-editor" id="configEditorTextarea" spellcheck="false"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <span style="font-size:12px; color:var(--text-muted);" id="editorStatusText">Ready</span>
+        <div style="display:flex; gap:8px;" id="editorActionBtns">
+          <button class="btn" onclick="closeConfigEditor()">Close</button>
+          <button class="btn btn-primary" onclick="saveConfigEditorFile(false)">💾 Save</button>
+          <button class="btn btn-success" onclick="saveConfigEditorFile(true)">💾 Save & Firmware Restart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add / Edit Printer Modal -->
+  <div class="modal-backdrop" id="printerModal">
+    <div class="modal-card">
+      <div class="card-header">
+        <div class="card-title">🖨️ Manage Printers</div>
+        <button class="btn" onclick="closePrinterModal()">✖</button>
+      </div>
+      <div id="printerManageList" style="display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;"></div>
+      <div class="form-group">
+        <label>Printer Name</label>
+        <input type="text" class="form-input" id="inpPrinterName" placeholder="e.g. My K2" />
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(85px, 1fr)); gap:8px;">
+        <div class="form-group">
+          <label>IP / Hostname</label>
+          <input type="text" class="form-input" id="inpPrinterHost" placeholder="192.168.1.84" />
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input type="number" class="form-input" id="inpPrinterPort" value="7125" />
+        </div>
+        <div class="form-group">
+          <label>Web/Cam</label>
+          <input type="number" class="form-input" id="inpPrinterWebPort" value="4408" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Moonraker API Key (Optional)</label>
+        <input type="text" class="form-input" id="inpPrinterKey" placeholder="Leave blank if none" />
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn" onclick="closePrinterModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveNewPrinter()">💾 Save Printer</button>
+      </div>
+
+      <!-- App Updates & Version Section -->
+      <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-weight:700; font-size:13px;">🚀 Klipperraker Pro Updates</div>
+            <div style="font-size:11px; color:var(--text-muted);" id="lblCurrentAppVersion">Version: 1.0.0</div>
+          </div>
+          <button class="btn btn-primary" style="padding:6px 12px; font-size:12px;" onclick="checkForAppUpdate(true)">🔄 Check for Updates</button>
+        </div>
+        <div class="form-group" style="margin-top:8px;">
+          <label style="font-size:11px;">GitHub Repository (owner/repo)</label>
+          <input type="text" class="form-input" id="inpGithubRepo" placeholder="username/klipperraker" onchange="saveGithubRepo(this.value)" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Update Available Modal -->
+  <div class="modal-backdrop" id="updateModal">
+    <div class="modal-card" style="max-width:440px;">
+      <div class="card-header">
+        <div class="card-title">🚀 App Update Available</div>
+        <button class="btn" onclick="closeUpdateModal()">✖</button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin:8px 0;">
+        <div>
+          <div style="font-weight:800; font-size:17px; color:var(--accent);" id="updateNewVersion">v1.1.0</div>
+          <div style="font-size:12px; color:var(--text-muted);" id="updateCurrentVersion">Current: v1.0.0</div>
+        </div>
+        <span class="badge" id="updateBadgeStatus" style="background:rgba(34,197,94,0.2); color:#4ade80;">READY TO INSTALL</span>
+      </div>
+      <div style="background:var(--bg-main); border:1px solid var(--border); border-radius:8px; padding:10px; font-size:12.5px; max-height:120px; overflow-y:auto; line-height:1.4;" id="updateChangelog">
+        • Bug fixes and improvements
+      </div>
+      <div id="updateProgressWrap" style="display:none; margin:10px 0;">
+        <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+          <span id="updateProgressStatus">Downloading update...</span>
+          <span id="updateProgressPct">0%</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-fill" id="updateProgressBar" style="width:0%;"></div></div>
+      </div>
+      <div id="updatePermissionNote" style="display:none; color:var(--yellow); font-size:11.5px; margin:6px 0; background:rgba(234,179,8,0.1); padding:8px; border-radius:6px; border:1px solid rgba(234,179,8,0.3);">
+        ⚠️ Android requires permission to install updates. If prompted, please toggle <b>"Allow from this source"</b>, then tap Install below.
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+        <button class="btn" id="btnUpdateLater" onclick="closeUpdateModal()">Later</button>
+        <button class="btn btn-primary" id="btnStartUpdate" onclick="startAppUpdateDownload()">📥 Download & Install</button>
+      </div>
+    </div>
+  </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

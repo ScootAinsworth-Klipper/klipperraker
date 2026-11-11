@@ -1,0 +1,7 @@
+build/
+*.png
+*.apk
+*.keystore
+.gradle/
+.idea/
+*.iml
