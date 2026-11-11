@@ -1852,7 +1852,7 @@ function openPrinterModal() {
       if (lbl) lbl.innerText = `Version: ${v.versionName} (Build ${v.versionCode})`;
     } catch (e) {}
   }
-  const savedRepo = localStorage.getItem("klipper_github_repo") || "";
+  const savedRepo = localStorage.getItem("klipper_github_repo") || "scoot05redss/klipperraker";
   const inpRepo = document.getElementById("inpGithubRepo");
   if (inpRepo) inpRepo.value = savedRepo;
   document.getElementById("printerModal").classList.add("open");
@@ -1868,7 +1868,7 @@ let currentAppVersionName = "1.0.0";
 let currentAppVersionCode = 1;
 
 function getGithubRepo() {
-  return localStorage.getItem("klipper_github_repo") || "";
+  return localStorage.getItem("klipper_github_repo") || "scoot05redss/klipperraker";
 }
 
 function saveGithubRepo(val) {
