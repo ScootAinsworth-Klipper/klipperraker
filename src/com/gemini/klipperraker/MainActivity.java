@@ -188,7 +188,51 @@ public class MainActivity extends Activity {
 
     public static boolean isWifiConnectedInternal(Context ctx) {
         try {
-            // 1. Direct hardware check: Does any wlan/eth interface have an IP in home subnet (192.168.1.0/24)?
+            if (ctx == null) return false;
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+
+            // 1. Android Auto & Cellular Priority Check:
+            // When Wireless Android Auto is active, the phone connects to the car's Wi-Fi radio (which has NO internet).
+            // Android simultaneously routes all internet traffic over Cellular (TRANSPORT_CELLULAR).
+            // If the primary active network is Cellular, we are in Remote / Cellular mode!
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.net.Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(activeNet);
+                    if (caps != null) {
+                        if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                            !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // 2. Check if there is an active Wi-Fi connection with Internet capability.
+            // Android Auto Wi-Fi does NOT have NET_CAPABILITY_INTERNET or NET_CAPABILITY_VALIDATED.
+            boolean hasInternetWifi = false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.net.Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(activeNet);
+                    if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) &&
+                        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        hasInternetWifi = true;
+                    }
+                }
+            } else {
+                android.net.NetworkInfo activeInfo = cm.getActiveNetworkInfo();
+                if (activeInfo != null && activeInfo.isConnected() && activeInfo.getType() == android.net.ConnectivityManager.TYPE_WIFI) {
+                    hasInternetWifi = true;
+                }
+            }
+
+            if (!hasInternetWifi) {
+                return false;
+            }
+
+            // 3. We are on a Wi-Fi network with internet. Now verify if it is our Home Subnet (192.168.1.0/24)
             for (java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces(); en != null && en.hasMoreElements(); ) {
                 java.net.NetworkInterface intf = en.nextElement();
                 String name = intf.getName().toLowerCase();
@@ -205,39 +249,6 @@ public class MainActivity extends Activity {
                 }
             }
 
-            // 2. ConnectivityManager Wi-Fi transport check
-            if (ctx != null) {
-                android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
-                if (cm != null) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        android.net.Network activeNet = cm.getActiveNetwork();
-                        if (activeNet != null) {
-                            android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(activeNet);
-                            if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
-                                return true;
-                            }
-                        }
-                    }
-                    android.net.Network[] allNets = cm.getAllNetworks();
-                    if (allNets != null) {
-                        for (android.net.Network n : allNets) {
-                            android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(n);
-                            if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-
-                // 3. WifiManager fallback
-                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) ctx.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-                if (wm != null && wm.isWifiEnabled()) {
-                    android.net.wifi.WifiInfo info = wm.getConnectionInfo();
-                    if (info != null && info.getNetworkId() != -1 && info.getIpAddress() != 0) {
-                        return true;
-                    }
-                }
-            }
             return false;
         } catch (Exception e) {
             return false;
@@ -379,18 +390,13 @@ public class MainActivity extends Activity {
             return isWifiConnectedInternal(ctx);
         }
 
-        @JavascriptInterface
-        public String nativeHttp(String method, String urlStr, String headersJson, String postBody) {
+        private String executeHttpRequest(String method, String urlStr, String headersJson, String postBody, java.net.Proxy proxy, int timeoutMs) {
             try {
                 java.net.URL url = new java.net.URL(urlStr);
-                java.net.Proxy proxy = java.net.Proxy.NO_PROXY;
-                if (!isWifiConnected()) {
-                    proxy = new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
-                }
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection(proxy);
                 conn.setRequestMethod(method != null ? method.toUpperCase() : "GET");
-                conn.setConnectTimeout(6000);
-                conn.setReadTimeout(12000);
+                conn.setConnectTimeout(timeoutMs);
+                conn.setReadTimeout(timeoutMs + 4000);
                 conn.setDoInput(true);
                 if (headersJson != null && !headersJson.trim().isEmpty()) {
                     org.json.JSONObject hdrs = new org.json.JSONObject(headersJson);
@@ -437,16 +443,29 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String fetchImageBase64(String urlStr) {
+        public String nativeHttp(String method, String urlStr, String headersJson, String postBody) {
+            boolean isWifi = isWifiConnected();
+            java.net.Proxy proxy = isWifi ? java.net.Proxy.NO_PROXY : new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
+            String res = executeHttpRequest(method, urlStr, headersJson, postBody, proxy, isWifi ? 3000 : 8000);
+
+            // Resilient fallback: If direct connection failed while on Wi-Fi (e.g. Android Auto or foreign Wi-Fi),
+            // immediately retry through the local WireGuard SOCKS proxy!
+            if (isWifi && (res == null || res.contains("\"status\":0"))) {
+                java.net.Proxy socksProxy = new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
+                String fallbackRes = executeHttpRequest(method, urlStr, headersJson, postBody, socksProxy, 8000);
+                if (fallbackRes != null && !fallbackRes.contains("\"status\":0")) {
+                    return fallbackRes;
+                }
+            }
+            return res;
+        }
+
+        private String executeFetchImage(String urlStr, java.net.Proxy proxy, int timeoutMs) {
             try {
                 java.net.URL url = new java.net.URL(urlStr);
-                java.net.Proxy proxy = java.net.Proxy.NO_PROXY;
-                if (!isWifiConnected()) {
-                    proxy = new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
-                }
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection(proxy);
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(6000);
+                conn.setConnectTimeout(timeoutMs);
+                conn.setReadTimeout(timeoutMs + 2000);
                 int code = conn.getResponseCode();
                 if (code == 200) {
                     java.io.InputStream is = conn.getInputStream();
@@ -462,6 +481,18 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception ignored) {}
             return "";
+        }
+
+        @JavascriptInterface
+        public String fetchImageBase64(String urlStr) {
+            boolean isWifi = isWifiConnected();
+            java.net.Proxy proxy = isWifi ? java.net.Proxy.NO_PROXY : new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
+            String res = executeFetchImage(urlStr, proxy, isWifi ? 2500 : 6000);
+            if (isWifi && (res == null || res.isEmpty())) {
+                java.net.Proxy socksProxy = new java.net.Proxy(java.net.Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
+                return executeFetchImage(urlStr, socksProxy, 6000);
+            }
+            return res;
         }
 
         @JavascriptInterface

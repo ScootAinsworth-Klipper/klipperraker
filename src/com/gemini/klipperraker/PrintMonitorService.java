@@ -124,11 +124,30 @@ public class PrintMonitorService extends Service {
                 HttpURLConnection conn = null;
                 try {
                     URL url = new URL(urlStr);
-                    conn = (HttpURLConnection) url.openConnection(proxy);
-                    conn.setConnectTimeout(4500);
-                    conn.setReadTimeout(4500);
-                    if (apiKey != null && !apiKey.isEmpty()) {
-                        conn.setRequestProperty("X-Api-Key", apiKey);
+                    try {
+                        conn = (HttpURLConnection) url.openConnection(proxy);
+                        conn.setConnectTimeout(3000);
+                        conn.setReadTimeout(4000);
+                        if (apiKey != null && !apiKey.isEmpty()) {
+                            conn.setRequestProperty("X-Api-Key", apiKey);
+                        }
+                        int respCode = conn.getResponseCode();
+                        if (respCode != 200 && proxy == Proxy.NO_PROXY) {
+                            throw new Exception("Direct connection non-200: " + respCode);
+                        }
+                    } catch (Exception directEx) {
+                        if (proxy == Proxy.NO_PROXY) {
+                            if (conn != null) conn.disconnect();
+                            Proxy fallbackProxy = new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
+                            conn = (HttpURLConnection) url.openConnection(fallbackProxy);
+                            conn.setConnectTimeout(5000);
+                            conn.setReadTimeout(5000);
+                            if (apiKey != null && !apiKey.isEmpty()) {
+                                conn.setRequestProperty("X-Api-Key", apiKey);
+                            }
+                        } else {
+                            throw directEx;
+                        }
                     }
                     if (conn.getResponseCode() == 200) {
                         BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
