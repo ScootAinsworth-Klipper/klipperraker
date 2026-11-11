@@ -752,7 +752,14 @@ function updateDashboardUI(p, st) {
   stateBadge.innerText = effectiveState.toUpperCase();
 
   // Toggle Active Print Guard Badge
-  document.getElementById("printGuardBadge").style.display = isPrintActive() ? "inline-block" : "none";
+  const anyPrinting = isPrintActive();
+  document.getElementById("printGuardBadge").style.display = anyPrinting ? "inline-block" : "none";
+  if (window._lastPrintActiveState !== anyPrinting) {
+    window._lastPrintActiveState = anyPrinting;
+    if (window.AndroidBridge && AndroidBridge.setPrintActive) {
+      AndroidBridge.setPrintActive(anyPrinting);
+    }
+  }
 
   const banner = document.getElementById("printerAlertBanner");
   const alertTxt = document.getElementById("printerAlertText");
@@ -1852,7 +1859,7 @@ function openPrinterModal() {
       if (lbl) lbl.innerText = `Version: ${v.versionName} (Build ${v.versionCode})`;
     } catch (e) {}
   }
-  const savedRepo = localStorage.getItem("klipper_github_repo") || "scoot05redss/klipperraker";
+  const savedRepo = localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
   const inpRepo = document.getElementById("inpGithubRepo");
   if (inpRepo) inpRepo.value = savedRepo;
   document.getElementById("printerModal").classList.add("open");
@@ -1864,11 +1871,11 @@ function closePrinterModal() {
 
 /* IN-APP UPDATER (GITHUB RELEASES & DIRECT OTA) */
 let pendingUpdateApkUrl = "";
-let currentAppVersionName = "1.0.1";
-let currentAppVersionCode = 2;
+let currentAppVersionName = "1.0.2";
+let currentAppVersionCode = 3;
 
 function getGithubRepo() {
-  return localStorage.getItem("klipper_github_repo") || "scoot05redss/klipperraker";
+  return localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
 }
 
 function saveGithubRepo(val) {

@@ -125,9 +125,12 @@ public class MainActivity extends Activity {
 
         setupNetworkMonitoring();
 
-        if (prefs.getBoolean("bg_monitor", true)) {
-            startMonitorService();
-        }
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel(1001);
+            }
+        } catch (Exception ignored) {}
     }
 
     private android.net.ConnectivityManager.NetworkCallback networkCallback;
@@ -269,6 +272,13 @@ public class MainActivity extends Activity {
             Intent svc = new Intent(this, PrintMonitorService.class);
             svc.setAction("STOP");
             startService(svc);
+        } catch (Exception ignored) {
+        }
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel(1001);
+            }
         } catch (Exception ignored) {
         }
     }
@@ -481,6 +491,25 @@ public class MainActivity extends Activity {
             } else {
                 stopMonitorService();
             }
+        }
+
+        @JavascriptInterface
+        public void setPrintActive(final boolean active) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    SharedPreferences prefs = ctx.getSharedPreferences("klipper_prefs", Context.MODE_PRIVATE);
+                    if (!prefs.getBoolean("bg_monitor", true)) {
+                        stopMonitorService();
+                        return;
+                    }
+                    if (active) {
+                        startMonitorService();
+                    } else {
+                        stopMonitorService();
+                    }
+                }
+            });
         }
 
         @JavascriptInterface

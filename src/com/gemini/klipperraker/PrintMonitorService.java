@@ -70,14 +70,16 @@ public class PrintMonitorService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && "STOP".equals(intent.getAction())) {
             running = false;
-            handler.removeCallbacksAndMessages(null);
+            if (handler != null) handler.removeCallbacksAndMessages(null);
             stopForeground(true);
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(NOTIF_ID_ONGOING);
             stopSelf();
             return START_NOT_STICKY;
         }
         if (!running) {
             running = true;
-            startForeground(NOTIF_ID_ONGOING, buildOngoingNotification("Klipperraker Pro", "Monitoring printers in background...", -1));
+            startForeground(NOTIF_ID_ONGOING, buildOngoingNotification("Klipperraker Pro", "Checking printer status...", -1));
             handler.post(pollTask);
         }
         return START_STICKY;
@@ -91,12 +93,21 @@ public class PrintMonitorService extends Service {
         try {
             SharedPreferences prefs = getSharedPreferences("klipper_prefs", Context.MODE_PRIVATE);
             String printersJson = prefs.getString("printers_json", "");
-            if (printersJson == null || printersJson.isEmpty()) return;
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (printersJson == null || printersJson.isEmpty()) {
+                running = false;
+                if (handler != null) handler.removeCallbacksAndMessages(null);
+                stopForeground(true);
+                if (nm != null) nm.cancel(NOTIF_ID_ONGOING);
+                stopSelf();
+                return;
+            }
 
             JSONArray arr = new JSONArray(printersJson);
-            String summaryTitle = "Klipperraker Active";
-            String summaryBody = "No active print jobs";
+            String summaryTitle = "";
+            String summaryBody = "";
             int activeProgress = -1;
+            boolean anyActivePrint = false;
 
             Proxy proxy = isWifiConnected() ? Proxy.NO_PROXY : new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("127.0.0.1", LocalBridgeServer.socksPort));
 
@@ -153,12 +164,10 @@ public class PrintMonitorService extends Service {
                         lastStates.put(id, state);
 
                         if ("printing".equalsIgnoreCase(state) || "paused".equalsIgnoreCase(state)) {
+                            anyActivePrint = true;
                             summaryTitle = name + " • " + state.toUpperCase() + " (" + pct + "%)";
                             summaryBody = String.format("%s | Nozzle %.0f°C • Bed %.0f°C", filename, nozTemp, bedTemp);
                             activeProgress = pct;
-                        } else if (activeProgress < 0) {
-                            summaryTitle = name + " • " + state.toUpperCase();
-                            summaryBody = String.format("Nozzle %.1f°C • Bed %.1f°C", nozTemp, bedTemp);
                         }
                     }
                 } catch (Exception ignored) {
@@ -167,7 +176,15 @@ public class PrintMonitorService extends Service {
                 }
             }
 
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (!anyActivePrint) {
+                running = false;
+                if (handler != null) handler.removeCallbacksAndMessages(null);
+                stopForeground(true);
+                if (nm != null) nm.cancel(NOTIF_ID_ONGOING);
+                stopSelf();
+                return;
+            }
+
             if (nm != null && running) {
                 nm.notify(NOTIF_ID_ONGOING, buildOngoingNotification(summaryTitle, summaryBody, activeProgress));
             }
