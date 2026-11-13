@@ -2090,8 +2090,8 @@ function closePrinterModal() {
 
 /* IN-APP UPDATER (GITHUB RELEASES & DIRECT OTA) */
 let pendingUpdateApkUrl = "";
-let currentAppVersionName = "1.0.12";
-let currentAppVersionCode = 13;
+let currentAppVersionName = "1.0.13";
+let currentAppVersionCode = 14;
 
 function getGithubRepo() {
   return localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
