@@ -16,6 +16,7 @@
     <div class="top-actions">
       <button class="btn" onclick="forceReconnectAll()" title="Reconnect / Refresh">🔄 Reconnect</button>
       <button class="btn" id="btnLedToggle" onclick="toggleChamberLed()" title="Toggle Printer LED">💡 LED</button>
+      <button class="btn" onclick="openAppSettingsModal()" title="App Settings">⚙️</button>
       <button class="btn" onclick="openPrinterModal()">➕ Printer</button>
       <button class="btn btn-estop" onclick="confirmEmergencyStop()">🛑 E-STOP</button>
     </div>
@@ -579,7 +580,7 @@
 
   <!-- Add / Edit Printer Modal -->
   <div class="modal-backdrop" id="printerModal">
-    <div class="modal-card">
+    <div class="modal-card" style="max-height:90vh; overflow-y:auto;">
       <div class="card-header">
         <div class="card-title">🖨️ Manage Printers</div>
         <button class="btn" onclick="closePrinterModal()">✖</button>
@@ -611,13 +612,56 @@
         <button class="btn" onclick="closePrinterModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveNewPrinter()">💾 Save Printer</button>
       </div>
+    </div>
+  </div>
+
+  <!-- App Settings Modal -->
+  <div class="modal-backdrop" id="appSettingsModal" onclick="if(event.target===this) closeAppSettingsModal()">
+    <div class="modal-card" style="max-width:440px;">
+      <div class="card-header">
+        <div class="card-title">⚙️ App Settings</div>
+        <button class="btn" onclick="closeAppSettingsModal()">✖</button>
+      </div>
+
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">🎨 Appearance &amp; Theme</div>
+      <div class="theme-mode-group">
+        <button class="theme-mode-btn" id="btnThemeNavy" onclick="setThemeMode('navy')">🌙 Midnight Navy</button>
+        <button class="theme-mode-btn" id="btnThemeAmoled" onclick="setThemeMode('amoled')">🖤 True Black AMOLED</button>
+      </div>
+      <div class="color-picker-row">
+        <span style="font-size:12px; font-weight:600; color:var(--text-muted);">Primary</span>
+        <div class="color-swatches" id="primarySwatches">
+          <button class="color-swatch" style="background:#38bdf8;" onclick="setPrimaryColor('#38bdf8')"></button>
+          <button class="color-swatch" style="background:#3b82f6;" onclick="setPrimaryColor('#3b82f6')"></button>
+          <button class="color-swatch" style="background:#22c55e;" onclick="setPrimaryColor('#22c55e')"></button>
+          <button class="color-swatch" style="background:#a855f7;" onclick="setPrimaryColor('#a855f7')"></button>
+          <button class="color-swatch" style="background:#f97316;" onclick="setPrimaryColor('#f97316')"></button>
+          <button class="color-swatch" style="background:#ef4444;" onclick="setPrimaryColor('#ef4444')"></button>
+          <input type="color" class="color-input-native" id="inpThemePrimary" value="#38bdf8" oninput="setPrimaryColor(this.value)" />
+        </div>
+      </div>
+      <div class="color-picker-row">
+        <span style="font-size:12px; font-weight:600; color:var(--text-muted);">Secondary</span>
+        <div class="color-swatches" id="secondarySwatches">
+          <button class="color-swatch" style="background:#22c55e;" onclick="setSecondaryColor('#22c55e')"></button>
+          <button class="color-swatch" style="background:#14b8a6;" onclick="setSecondaryColor('#14b8a6')"></button>
+          <button class="color-swatch" style="background:#06b6d4;" onclick="setSecondaryColor('#06b6d4')"></button>
+          <button class="color-swatch" style="background:#eab308;" onclick="setSecondaryColor('#eab308')"></button>
+          <button class="color-swatch" style="background:#ec4899;" onclick="setSecondaryColor('#ec4899')"></button>
+          <button class="color-swatch" style="background:#8b5cf6;" onclick="setSecondaryColor('#8b5cf6')"></button>
+          <input type="color" class="color-input-native" id="inpThemeSecondary" value="#22c55e" oninput="setSecondaryColor(this.value)" />
+        </div>
+      </div>
+      <div style="display:flex; justify-content:flex-start; margin-top:4px;">
+        <button class="btn" onclick="resetThemeSettings()">↺ Reset Default</button>
+      </div>
 
       <!-- App Updates & Version Section -->
-      <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
           <div>
             <div style="font-weight:700; font-size:13px;">🚀 Klipperraker Pro Updates</div>
-            <div style="font-size:11px; color:var(--text-muted);" id="lblCurrentAppVersion">Version: 1.0.0</div>
+            <div style="font-size:11px; color:var(--text-muted);" id="lblCurrentAppVersion">Version: 1.0.12 (Build 13)</div>
           </div>
           <button class="btn btn-primary" style="padding:6px 12px; font-size:12px;" onclick="checkForAppUpdate(true)">🔄 Check for Updates</button>
         </div>
@@ -625,6 +669,10 @@
           <label style="font-size:11px;">GitHub Repository (owner/repo)</label>
           <input type="text" class="form-input" id="inpGithubRepo" placeholder="username/klipperraker" onchange="saveGithubRepo(this.value)" />
         </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+        <button class="btn btn-primary" onclick="closeAppSettingsModal()">Done</button>
       </div>
     </div>
   </div>
@@ -662,6 +710,24 @@
       </div>
     </div>
   </div>
+    </div>
+  </div>
+
+  <!-- G-Code Model Preview Modal -->
+  <div class="modal-backdrop" id="gcodePreviewModal" onclick="if(event.target===this) closeGcodePreviewModal()">
+    <div class="modal-card" style="max-width:400px;">
+      <div class="card-header">
+        <div class="card-title" id="gcodePreviewTitle" style="word-break:break-all;">Model Preview</div>
+        <button class="btn" onclick="closeGcodePreviewModal()">✖</button>
+      </div>
+      <div style="background:#050811; border:1px solid var(--border); border-radius:10px; padding:12px; display:flex; align-items:center; justify-content:center; min-height:220px;">
+        <img id="gcodePreviewImg" src="" alt="Model Preview" style="max-width:100%; max-height:280px; object-fit:contain; border-radius:6px;" />
+      </div>
+      <div id="gcodePreviewMeta" style="font-size:12.5px; color:var(--text-muted); line-height:1.5;"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn" onclick="closeGcodePreviewModal()">Close</button>
+        <button class="btn btn-success" id="gcodePreviewPrintBtn">▶ Start Print</button>
+      </div>
     </div>
   </div>
 

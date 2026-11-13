@@ -1,3 +1,5 @@
+param([switch]$Bump)
+
 $ErrorActionPreference = "Stop"
 
 $appDir = "C:\Gemini\KlipperController-App"
@@ -11,6 +13,43 @@ $apksigner = "$buildTools\apksigner.bat"
 $androidJar = "$platform\android.jar"
 
 Set-Location $appDir
+
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+# Read and optionally bump version in AndroidManifest.xml, then sync fallback strings in assets
+$manifestPath = "$appDir\AndroidManifest.xml"
+$manifestText = [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)
+$vCodeMatch = [regex]::Match($manifestText, 'android:versionCode="(\d+)"')
+$vNameMatch = [regex]::Match($manifestText, 'android:versionName="([^"]+)"')
+if (-not $vCodeMatch.Success -or -not $vNameMatch.Success) {
+    throw "Could not parse versionCode/versionName from AndroidManifest.xml"
+}
+$vCode = [int]$vCodeMatch.Groups[1].Value
+$vName = $vNameMatch.Groups[1].Value
+
+if ($Bump) {
+    $vCode++
+    $parts = $vName.Split('.')
+    $parts[$parts.Length - 1] = ([int]$parts[$parts.Length - 1] + 1).ToString()
+    $vName = ($parts -join '.')
+    $manifestText = [regex]::Replace($manifestText, 'android:versionCode="\d+"', "android:versionCode=`"$vCode`"")
+    $manifestText = [regex]::Replace($manifestText, 'android:versionName="[^"]+"', "android:versionName=`"$vName`"")
+    [System.IO.File]::WriteAllText($manifestPath, $manifestText, $utf8NoBom)
+    Write-Host "Bumped version to v$vName (Build $vCode)"
+}
+
+$indexPath = "$appDir\assets\index.html"
+$indexText = [System.IO.File]::ReadAllText($indexPath, [System.Text.Encoding]::UTF8)
+$indexUpdated = [regex]::Replace($indexText, '(<div[^>]*id="lblCurrentAppVersion"[^>]*>)Version: [^<]+(</div>)', "`${1}Version: $vName (Build $vCode)`${2}")
+if ($indexUpdated -ne $indexText) { [System.IO.File]::WriteAllText($indexPath, $indexUpdated, $utf8NoBom) }
+
+$appJsPath = "$appDir\assets\app.js"
+$appJsText = [System.IO.File]::ReadAllText($appJsPath, [System.Text.Encoding]::UTF8)
+$appJsUpdated = [regex]::Replace($appJsText, 'let currentAppVersionName = "[^"]+";', "let currentAppVersionName = `"$vName`";")
+$appJsUpdated = [regex]::Replace($appJsUpdated, 'let currentAppVersionCode = \d+;', "let currentAppVersionCode = $vCode;")
+if ($appJsUpdated -ne $appJsText) { [System.IO.File]::WriteAllText($appJsPath, $appJsUpdated, $utf8NoBom) }
+
+Write-Host "Building Klipperraker Pro v$vName (Build $vCode)..."
 
 if (Test-Path "$appDir\build") { Remove-Item -Recurse -Force "$appDir\build" }
 New-Item -ItemType Directory -Force -Path "$appDir\build\gen", "$appDir\build\obj" | Out-Null
@@ -53,4 +92,6 @@ Write-Host "Step 7: Signing APK..."
 & $apksigner sign --ks "$appDir\debug.keystore" --ks-pass pass:android --key-pass pass:android "$appDir\Klipperraker-Pro.apk"
 if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
-Write-Host "SUCCESS: APK built and signed at $appDir\Klipperraker-Pro.apk"
+$versionedApk = "$appDir\Klipperraker-Pro-v$vName.apk"
+Copy-Item "$appDir\Klipperraker-Pro.apk" $versionedApk -Force
+Write-Host "SUCCESS: Built & signed v$vName (Build $vCode) at $appDir\Klipperraker-Pro.apk and $versionedApk"

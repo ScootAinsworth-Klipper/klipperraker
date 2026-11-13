@@ -450,9 +450,11 @@ async function selectPrinter(idx) {
 
 function switchTab(tabId, el) {
   document.querySelectorAll(".tab-pane").forEach(s => s.classList.remove("active"));
-  document.getElementById("tab-" + tabId).classList.add("active");
+  const pane = document.getElementById("tab-" + tabId);
+  if (pane) pane.classList.add("active");
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
-  if (el) el.classList.add("active");
+  const navEl = el || document.querySelector(`.nav-item[onclick*="'${tabId}'"]`);
+  if (navEl) navEl.classList.add("active");
 
   if (tabId === "files") {
     loadGcodeFiles();
@@ -1486,6 +1488,104 @@ function downloadTimelapseFile(videoUrl, dlName) {
   }
 }
 
+const gcodeMetaCache = {};
+
+function formatPrintDuration(sec) {
+  if (!sec || sec <= 0) return "";
+  const hrs = Math.floor(sec / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  if (hrs > 0) return `${hrs}h ${mins}m`;
+  return `${Math.max(1, mins)}m`;
+}
+
+function buildGcodeThumbUrl(p, relPath) {
+  const encoded = relPath.split("/").map(seg => encodeURIComponent(seg)).join("/");
+  return `${baseUrl(p)}/server/files/gcodes/${encoded}`;
+}
+
+function applyGcodeMetadataToRow(p, f, idx, meta) {
+  const thumbWrap = document.getElementById(`gthumb-${idx}`);
+  const metaEl = document.getElementById(`gmeta-${idx}`);
+  if (!thumbWrap || !metaEl) return;
+
+  const mb = ((f.size || 0) / (1024 * 1024)).toFixed(2);
+  const dateStr = f.modified ? new Date(f.modified * 1000).toLocaleString() : "";
+  const extraParts = [];
+  const durStr = formatPrintDuration(meta.estimated_time);
+  if (durStr) extraParts.push(`⏱ ${durStr}`);
+  if (meta.filament_total && meta.filament_total > 0) {
+    extraParts.push(`🧵 ${(meta.filament_total / 1000).toFixed(1)}m`);
+  }
+  metaEl.textContent = `${mb} MB${extraParts.length ? " • " + extraParts.join(" • ") : ""}${dateStr ? " • " + dateStr : ""}`;
+
+  const thumbs = (meta.thumbnails || []).filter(t => t.relative_path || t.thumbnail_path);
+  if (thumbs.length) {
+    thumbs.sort((a, b) => (b.width || 0) - (a.width || 0));
+    const best = thumbs[0];
+    const relPath = best.relative_path || best.thumbnail_path;
+    const thumbUrl = buildGcodeThumbUrl(p, relPath);
+
+    thumbWrap.classList.add("clickable");
+    thumbWrap.onclick = () => openGcodePreviewModal(f.path, thumbUrl, metaEl.textContent, meta);
+    thumbWrap.innerHTML = `<img class="gcode-thumb-img" src="${thumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.remove('clickable');this.parentElement.onclick=null;this.parentElement.innerHTML='📄';" />`;
+  }
+}
+
+async function hydrateGcodeThumbnails(p, files, mySeq) {
+  const queue = files.map((f, idx) => ({ f, idx }));
+  const workerCount = 5;
+
+  async function worker() {
+    while (queue.length > 0) {
+      if (mySeq !== switchSeq) return;
+      const item = queue.shift();
+      if (!item) return;
+      const { f, idx } = item;
+      const cacheKey = `${p.id}::${f.path}`;
+
+      let meta = gcodeMetaCache[cacheKey];
+      if (!meta) {
+        try {
+          const r = await moonrakerFetch(p, `/server/files/metadata?filename=${encodeURIComponent(f.path)}`);
+          if (mySeq !== switchSeq) return;
+          if (r.ok) {
+            const d = await r.json();
+            meta = d.result || {};
+            gcodeMetaCache[cacheKey] = meta;
+          }
+        } catch (e) {}
+      }
+
+      if (mySeq !== switchSeq) return;
+      if (meta) {
+        applyGcodeMetadataToRow(p, f, idx, meta);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+function openGcodePreviewModal(filename, thumbUrl, metaSummary, meta) {
+  document.getElementById("gcodePreviewTitle").textContent = filename;
+  document.getElementById("gcodePreviewImg").src = thumbUrl;
+  const details = [metaSummary];
+  if (meta && meta.layer_height) details.push(`Layer height: ${meta.layer_height} mm`);
+  if (meta && meta.slicer) details.push(`Slicer: ${meta.slicer}${meta.slicer_version ? " " + meta.slicer_version : ""}`);
+  document.getElementById("gcodePreviewMeta").innerHTML = details.map(escapeHtml).join("<br>");
+  const printBtn = document.getElementById("gcodePreviewPrintBtn");
+  printBtn.onclick = () => {
+    closeGcodePreviewModal();
+    startPrintFile(filename);
+  };
+  document.getElementById("gcodePreviewModal").classList.add("open");
+}
+
+function closeGcodePreviewModal() {
+  document.getElementById("gcodePreviewModal").classList.remove("open");
+  document.getElementById("gcodePreviewImg").src = "";
+}
+
 async function loadGcodeFiles() {
   const p = getActivePrinter();
   const mySeq = switchSeq;
@@ -1499,13 +1599,16 @@ async function loadGcodeFiles() {
       wrap.innerHTML = `<div style="color:var(--text-muted);">No G-code files stored on ${escapeHtml(p.name)}.</div>`;
       return;
     }
-    wrap.innerHTML = files.map(f => {
+    wrap.innerHTML = files.map((f, idx) => {
       const mb = ((f.size || 0) / (1024 * 1024)).toFixed(2);
       const dateStr = f.modified ? new Date(f.modified * 1000).toLocaleString() : "";
       return `<div class="file-item">
-        <div style="overflow:hidden;">
-          <div style="font-weight:700; word-break:break-all;">📄 ${escapeHtml(f.path)}</div>
-          <div class="file-meta">${mb} MB • ${dateStr}</div>
+        <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:0;">
+          <div class="gcode-thumb-box" id="gthumb-${idx}">📄</div>
+          <div style="overflow:hidden; min-width:0;">
+            <div style="font-weight:700; word-break:break-all;">${escapeHtml(f.path)}</div>
+            <div class="file-meta" id="gmeta-${idx}">${mb} MB${dateStr ? " • " + dateStr : ""}</div>
+          </div>
         </div>
         <div style="display:flex; gap:6px; flex-shrink:0;">
           <button class="btn btn-success" onclick="startPrintFile('${escapeHtml(f.path)}')">▶ Print</button>
@@ -1513,6 +1616,8 @@ async function loadGcodeFiles() {
         </div>
       </div>`;
     }).join("");
+
+    hydrateGcodeThumbnails(p, files, mySeq);
   } catch (e) {
     if (mySeq !== switchSeq) return;
     wrap.innerHTML = `<div style="color:var(--red);">Could not load files from ${escapeHtml(p.name)} (${p.host}).</div>`;
@@ -1865,9 +1970,46 @@ async function rebootPrinterHost() {
 }
 
 /* MULTI-PRINTER FARM OVERVIEW */
+const farmSnapUrlCache = {};
+
+function ensureFarmCardSkeletons(grid) {
+  if (!grid) return;
+  if (grid.dataset.count === String(printers.length) && grid.children.length === printers.length) return;
+  grid.dataset.count = String(printers.length);
+  grid.innerHTML = printers.map((p, idx) => `
+    <div class="card" id="farm-card-${idx}" onclick="selectPrinter(${idx}); switchTab('dashboard', document.querySelector('.nav-item'));" style="cursor:pointer;">
+      <div class="card-header">
+        <div class="card-title">🖨️ ${escapeHtml(p.name)} <span style="font-size:11px; color:var(--text-muted);">(${escapeHtml(p.host)})</span></div>
+        <span class="badge" id="farm-badge-${idx}">...</span>
+      </div>
+      <div id="farm-online-body-${idx}" style="display:flex; flex-direction:column; gap:10px;">
+        <div class="farm-cam-wrap" id="farm-cam-${idx}">
+          <img class="farm-cam-img" id="farm-img-${idx}" alt="" />
+        </div>
+        <div id="farm-file-${idx}" style="font-size:13px; font-weight:700; word-break:break-word;">Loading...</div>
+        <div class="progress-wrap"><div class="progress-fill" id="farm-prog-${idx}" style="width:0%;"></div></div>
+        <div id="farm-temp-${idx}" style="font-size:12px; color:var(--text-muted);">🔥 Nozzle: --°C &nbsp;|&nbsp; 🛏️ Bed: --°C</div>
+      </div>
+      <div id="farm-offline-body-${idx}" style="display:none; flex-direction:column; gap:10px;">
+        <div style="color:var(--text-muted); font-size:12px; padding:12px 0;">Printer unreachable on LAN (${escapeHtml(p.host)}:${p.port}).</div>
+        <button class="btn" onclick="event.stopPropagation(); selectPrinter(${idx}); switchTab('dashboard', document.querySelector('.nav-item'));">Select Printer</button>
+      </div>
+    </div>
+  `).join("");
+}
+
 async function pollFarmPrinters() {
   const grid = document.getElementById("farmGrid");
-  const cards = await Promise.all(printers.map(async (p, idx) => {
+  ensureFarmCardSkeletons(grid);
+
+  await Promise.all(printers.map(async (p, idx) => {
+    const badgeEl = document.getElementById(`farm-badge-${idx}`);
+    const onlineEl = document.getElementById(`farm-online-body-${idx}`);
+    const offlineEl = document.getElementById(`farm-offline-body-${idx}`);
+    const fileEl = document.getElementById(`farm-file-${idx}`);
+    const progEl = document.getElementById(`farm-prog-${idx}`);
+    const tempEl = document.getElementById(`farm-temp-${idx}`);
+
     try {
       const r = await moonrakerFetch(p, "/printer/objects/query?webhooks&print_stats&virtual_sdcard&extruder&heater_bed");
       if (!r.ok) throw new Error("offline");
@@ -1882,59 +2024,64 @@ async function pollFarmPrinters() {
       const fname = (st.print_stats && st.print_stats.filename) || (whState === "shutdown" ? "MCU Shutdown" : "Idle");
       farmStatusCache[p.id] = state;
 
-      let snapUrl = resolveCamUrl(p, "/webcam/?action=snapshot");
-      try {
-        const wcRes = await moonrakerFetch(p, "/server/webcams/list");
-        if (wcRes.ok) {
-          const wcData = await wcRes.json();
-          const firstCam = ((wcData.result && wcData.result.webcams) || []).find(c => c.enabled !== false);
-          if (firstCam && firstCam.snapshot_url) {
-            snapUrl = resolveCamUrl(p, firstCam.snapshot_url);
-          }
-        }
-      } catch (e) {}
-      const sep = snapUrl.includes("?") ? "&" : "?";
+      if (badgeEl) {
+        badgeEl.className = `badge ${state === "shutdown" ? "error" : state}`;
+        badgeEl.textContent = state.toUpperCase();
+      }
+      if (onlineEl) onlineEl.style.display = "flex";
+      if (offlineEl) offlineEl.style.display = "none";
+      if (fileEl) fileEl.textContent = `${fname} (${prog}%)`;
+      if (progEl) progEl.style.width = `${prog}%`;
+      if (tempEl) tempEl.innerHTML = `🔥 Nozzle: ${noz}°C &nbsp;|&nbsp; 🛏️ Bed: ${bed}°C`;
 
-      return `<div class="card" onclick="selectPrinter(${idx}); switchTab('dashboard', document.querySelector('.nav-item'));" style="cursor:pointer;">
-        <div class="card-header">
-          <div class="card-title">🖨️ ${escapeHtml(p.name)} <span style="font-size:11px; color:var(--text-muted);">(${p.host})</span></div>
-          <span class="badge ${state === 'shutdown' ? 'error' : state}">${state.toUpperCase()}</span>
-        </div>
-        <img src="${snapUrl}${sep}t=${Date.now()}" onerror="this.style.display='none'" style="width:100%; height:150px; object-fit:cover; border-radius:8px; background:#050811;" />
-        <div style="font-size:13px; font-weight:700;">${escapeHtml(fname)} (${prog}%)</div>
-        <div class="progress-wrap"><div class="progress-fill" style="width:${prog}%;"></div></div>
-        <div style="font-size:12px; color:var(--text-muted);">🔥 Nozzle: ${noz}°C &nbsp;|&nbsp; 🛏️ Bed: ${bed}°C</div>
-      </div>`;
+      let snapUrl = farmSnapUrlCache[p.id];
+      if (!snapUrl) {
+        snapUrl = resolveCamUrl(p, "/webcam/?action=snapshot");
+        try {
+          const wcRes = await moonrakerFetch(p, "/server/webcams/list");
+          if (wcRes.ok) {
+            const wcData = await wcRes.json();
+            const firstCam = ((wcData.result && wcData.result.webcams) || []).find(c => c.enabled !== false);
+            if (firstCam && firstCam.snapshot_url) {
+              snapUrl = resolveCamUrl(p, firstCam.snapshot_url);
+            }
+          }
+        } catch (e) {}
+        farmSnapUrlCache[p.id] = snapUrl;
+      }
+
+      const sep = snapUrl.includes("?") ? "&" : "?";
+      const freshUrl = `${snapUrl}${sep}t=${Date.now()}`;
+      const pre = new Image();
+      pre.onload = () => {
+        const imgEl = document.getElementById(`farm-img-${idx}`);
+        const wrapEl = document.getElementById(`farm-cam-${idx}`);
+        if (imgEl && wrapEl) {
+          wrapEl.style.display = "flex";
+          imgEl.src = freshUrl;
+        }
+      };
+      pre.src = freshUrl;
     } catch (e) {
       farmStatusCache[p.id] = "offline";
-      return `<div class="card">
-        <div class="card-header">
-          <div class="card-title">🖨️ ${escapeHtml(p.name)} <span style="font-size:11px; color:var(--text-muted);">(${p.host})</span></div>
-          <span class="badge offline">OFFLINE</span>
-        </div>
-        <div style="color:var(--text-muted); font-size:12px; padding:16px 0;">Printer unreachable on LAN (${p.host}:${p.port}).</div>
-        <button class="btn" onclick="selectPrinter(${idx}); switchTab('dashboard', document.querySelector('.nav-item'));">Select Printer</button>
-      </div>`;
+      if (badgeEl) {
+        badgeEl.className = "badge offline";
+        badgeEl.textContent = "OFFLINE";
+      }
+      if (onlineEl) onlineEl.style.display = "none";
+      if (offlineEl) offlineEl.style.display = "flex";
     }
   }));
-  if (grid) grid.innerHTML = cards.join("");
   renderPrinterPills();
 }
 
 /* PRINTER MODAL & NATIVE NOTIFICATIONS */
 function openPrinterModal() {
   renderManagePrintersList();
-  if (window.AndroidBridge && AndroidBridge.getAppVersionInfo) {
-    try {
-      const v = JSON.parse(AndroidBridge.getAppVersionInfo());
-      const lbl = document.getElementById("lblCurrentAppVersion");
-      if (lbl) lbl.innerText = `Version: ${v.versionName} (Build ${v.versionCode})`;
-    } catch (e) {}
-  }
-  const savedRepo = localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
-  const inpRepo = document.getElementById("inpGithubRepo");
-  if (inpRepo) inpRepo.value = savedRepo;
-  document.getElementById("printerModal").classList.add("open");
+  const m = document.getElementById("printerModal");
+  m.classList.add("open");
+  const c = m.querySelector(".modal-card");
+  if (c) c.scrollTop = 0;
 }
 
 function closePrinterModal() {
@@ -1943,8 +2090,8 @@ function closePrinterModal() {
 
 /* IN-APP UPDATER (GITHUB RELEASES & DIRECT OTA) */
 let pendingUpdateApkUrl = "";
-let currentAppVersionName = "1.0.2";
-let currentAppVersionCode = 3;
+let currentAppVersionName = "1.0.12";
+let currentAppVersionCode = 13;
 
 function getGithubRepo() {
   return localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
@@ -2284,10 +2431,310 @@ function setupPullToRefresh() {
   });
 }
 
+// Left/right horizontal swipe gesture to switch tabs
+const TAB_ORDER = ["dashboard", "motion", "macros", "files", "machine", "farm"];
+
+function isSwipeIgnoredTarget(target) {
+  if (!target || !target.closest) return false;
+  if (target.closest('input, textarea, select, canvas, .printer-pills')) return true;
+  let el = target;
+  while (el && el !== document.body) {
+    if (el.classList && (el.classList.contains("main-content") || el.classList.contains("tab-pane"))) break;
+    if (el.scrollWidth > el.clientWidth + 6) {
+      const ox = getComputedStyle(el).overflowX;
+      if (ox === "auto" || ox === "scroll") return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
+function setupTabSwipeNavigation() {
+  const container = document.getElementById("mainContent") || document.querySelector(".main-content");
+  if (!container) return;
+
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let startTime = 0;
+  let tracking = false;
+  let lockedAxis = null;
+  let activePane = null;
+  let previewPane = null;
+  let previewDir = 0;
+  let currentIdx = -1;
+  let animTimer = null;
+
+  function clearPaneStyles(el) {
+    if (!el) return;
+    el.classList.remove("swipe-preview");
+    el.style.transition = "";
+    el.style.transform = "";
+    el.style.top = "";
+  }
+
+  function resetSwipeState() {
+    clearPaneStyles(activePane);
+    clearPaneStyles(previewPane);
+    tracking = false;
+    lockedAxis = null;
+    activePane = null;
+    previewPane = null;
+    previewDir = 0;
+    currentIdx = -1;
+  }
+
+  container.addEventListener("touchstart", (e) => {
+    if (animTimer) { clearTimeout(animTimer); animTimer = null; resetSwipeState(); }
+    if (!e.touches || e.touches.length !== 1) { tracking = false; return; }
+    if (document.querySelector(".modal-backdrop.open")) { tracking = false; return; }
+    if (isSwipeIgnoredTarget(e.target)) { tracking = false; return; }
+
+    activePane = document.querySelector(".tab-pane.active");
+    if (!activePane) { tracking = false; return; }
+    const currentId = activePane.id.replace("tab-", "");
+    currentIdx = TAB_ORDER.indexOf(currentId);
+    if (currentIdx === -1) { tracking = false; return; }
+
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    lastX = startX;
+    startTime = Date.now();
+    lockedAxis = null;
+    previewPane = null;
+    previewDir = 0;
+    tracking = true;
+  }, { passive: true });
+
+  container.addEventListener("touchmove", (e) => {
+    if (!tracking || !e.touches || e.touches.length !== 1) return;
+    const x = e.touches[0].clientX;
+    const y = e.touches[0].clientY;
+    const dx = x - startX;
+    const dy = y - startY;
+    lastX = x;
+
+    if (!lockedAxis) {
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+      if (Math.abs(dx) > Math.abs(dy) * 1.25) {
+        lockedAxis = "x";
+      } else {
+        lockedAxis = "y";
+        tracking = false;
+        return;
+      }
+    }
+
+    if (lockedAxis === "x") {
+      if (e.cancelable) e.preventDefault();
+      const dir = dx < 0 ? 1 : -1;
+      const nextIdx = currentIdx + dir;
+      const w = container.clientWidth || window.innerWidth;
+
+      if (nextIdx < 0 || nextIdx >= TAB_ORDER.length) {
+        if (previewPane) { clearPaneStyles(previewPane); previewPane = null; previewDir = 0; }
+        activePane.style.transition = "none";
+        activePane.style.transform = `translate3d(${dx * 0.22}px, 0, 0)`;
+        return;
+      }
+
+      if (previewDir !== dir) {
+        if (previewPane) clearPaneStyles(previewPane);
+        previewPane = document.getElementById("tab-" + TAB_ORDER[nextIdx]);
+        previewDir = dir;
+        if (previewPane) {
+          previewPane.classList.add("swipe-preview");
+          previewPane.style.top = (12 + container.scrollTop) + "px";
+        }
+      }
+
+      activePane.style.transition = "none";
+      activePane.style.transform = `translate3d(${dx}px, 0, 0)`;
+      if (previewPane) {
+        previewPane.style.transition = "none";
+        previewPane.style.transform = `translate3d(${dx + dir * w}px, 0, 0)`;
+      }
+    }
+  }, { passive: false });
+
+  function finishSwipe(cancelled) {
+    if (!tracking) return;
+    tracking = false;
+    if (lockedAxis !== "x" || !activePane) {
+      resetSwipeState();
+      return;
+    }
+
+    const dx = lastX - startX;
+    const dt = Date.now() - startTime;
+    const dir = dx < 0 ? 1 : -1;
+    const nextIdx = currentIdx + dir;
+    const w = container.clientWidth || window.innerWidth;
+    const canSwitch = !cancelled && nextIdx >= 0 && nextIdx < TAB_ORDER.length && previewPane &&
+      (Math.abs(dx) > w * 0.25 || (Math.abs(dx) > 45 && dt < 320));
+
+    const ease = "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
+    const curActive = activePane;
+    const curPreview = previewPane;
+
+    curActive.style.transition = ease;
+    if (curPreview) curPreview.style.transition = ease;
+
+    if (canSwitch) {
+      curActive.style.transform = `translate3d(${-dir * w}px, 0, 0)`;
+      curPreview.style.transform = "translate3d(0, 0, 0)";
+      const targetTab = TAB_ORDER[nextIdx];
+      animTimer = setTimeout(() => {
+        animTimer = null;
+        clearPaneStyles(curActive);
+        clearPaneStyles(curPreview);
+        switchTab(targetTab);
+        container.scrollTop = 0;
+        activePane = null;
+        previewPane = null;
+        lockedAxis = null;
+      }, 225);
+    } else {
+      curActive.style.transform = "translate3d(0, 0, 0)";
+      if (curPreview) curPreview.style.transform = `translate3d(${dir * w}px, 0, 0)`;
+      animTimer = setTimeout(() => {
+        animTimer = null;
+        clearPaneStyles(curActive);
+        clearPaneStyles(curPreview);
+        activePane = null;
+        previewPane = null;
+        lockedAxis = null;
+      }, 225);
+    }
+  }
+
+  container.addEventListener("touchend", () => finishSwipe(false), { passive: true });
+  container.addEventListener("touchcancel", () => finishSwipe(true), { passive: true });
+}
+
+/* APPEARANCE & THEME SETTINGS */
+const DEFAULT_THEME_MODE = "navy";
+const DEFAULT_PRIMARY_COLOR = "#38bdf8";
+const DEFAULT_SECONDARY_COLOR = "#22c55e";
+
+function hexToRgbTuple(hex) {
+  const clean = (hex || "").replace("#", "");
+  if (clean.length !== 6) return "56, 189, 248";
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `${r}, ${g}, ${b}`;
+}
+
+function darkenHex(hex, factor = 0.72) {
+  const clean = (hex || "").replace("#", "");
+  if (clean.length !== 6) return "#0284c7";
+  const r = Math.max(0, Math.round(parseInt(clean.slice(0, 2), 16) * factor));
+  const g = Math.max(0, Math.round(parseInt(clean.slice(2, 4), 16) * factor));
+  const b = Math.max(0, Math.round(parseInt(clean.slice(4, 6), 16) * factor));
+  return `#${[r, g, b].map(v => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function openAppSettingsModal() {
+  applyThemeSettings();
+  if (window.AndroidBridge && AndroidBridge.getAppVersionInfo) {
+    try {
+      const v = JSON.parse(AndroidBridge.getAppVersionInfo());
+      const lbl = document.getElementById("lblCurrentAppVersion");
+      if (lbl) lbl.innerText = `Version: ${v.versionName} (Build ${v.versionCode})`;
+    } catch (e) {}
+  }
+  const savedRepo = localStorage.getItem("klipper_github_repo") || "ScootAinsworth-Klipper/klipperraker";
+  const inpRepo = document.getElementById("inpGithubRepo");
+  if (inpRepo) inpRepo.value = savedRepo;
+  const m = document.getElementById("appSettingsModal");
+  m.classList.add("open");
+  const c = m.querySelector(".modal-card");
+  if (c) c.scrollTop = 0;
+}
+
+function closeAppSettingsModal() {
+  document.getElementById("appSettingsModal").classList.remove("open");
+}
+
+function applyThemeSettings() {
+  const mode = localStorage.getItem("klipper_theme_mode") || DEFAULT_THEME_MODE;
+  const primary = localStorage.getItem("klipper_theme_primary") || DEFAULT_PRIMARY_COLOR;
+  const secondary = localStorage.getItem("klipper_theme_secondary") || DEFAULT_SECONDARY_COLOR;
+
+  const root = document.documentElement;
+  if (mode === "amoled") {
+    root.setAttribute("data-theme", "amoled");
+  } else {
+    root.removeAttribute("data-theme");
+  }
+
+  const pRgb = hexToRgbTuple(primary);
+  const sRgb = hexToRgbTuple(secondary);
+  root.style.setProperty("--accent", primary);
+  root.style.setProperty("--accent-hover", darkenHex(primary, 0.72));
+  root.style.setProperty("--accent-soft", `rgba(${pRgb}, 0.18)`);
+  root.style.setProperty("--accent-nav", `rgba(${pRgb}, 0.08)`);
+  root.style.setProperty("--secondary", secondary);
+  root.style.setProperty("--secondary-soft", `rgba(${sRgb}, 0.20)`);
+
+  const btnNavy = document.getElementById("btnThemeNavy");
+  const btnAmoled = document.getElementById("btnThemeAmoled");
+  if (btnNavy && btnAmoled) {
+    btnNavy.classList.toggle("active", mode !== "amoled");
+    btnAmoled.classList.toggle("active", mode === "amoled");
+  }
+
+  const inpP = document.getElementById("inpThemePrimary");
+  const inpS = document.getElementById("inpThemeSecondary");
+  if (inpP) inpP.value = primary;
+  if (inpS) inpS.value = secondary;
+
+  document.querySelectorAll("#primarySwatches .color-swatch").forEach(el => {
+    const bg = el.getAttribute("onclick") || "";
+    el.classList.toggle("active", bg.toLowerCase().includes(primary.toLowerCase()));
+  });
+  document.querySelectorAll("#secondarySwatches .color-swatch").forEach(el => {
+    const bg = el.getAttribute("onclick") || "";
+    el.classList.toggle("active", bg.toLowerCase().includes(secondary.toLowerCase()));
+  });
+}
+
+function setThemeMode(mode) {
+  localStorage.setItem("klipper_theme_mode", mode === "amoled" ? "amoled" : "navy");
+  applyThemeSettings();
+}
+
+function setPrimaryColor(hex) {
+  if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+    localStorage.setItem("klipper_theme_primary", hex);
+    applyThemeSettings();
+  }
+}
+
+function setSecondaryColor(hex) {
+  if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+    localStorage.setItem("klipper_theme_secondary", hex);
+    applyThemeSettings();
+  }
+}
+
+function resetThemeSettings() {
+  localStorage.removeItem("klipper_theme_mode");
+  localStorage.removeItem("klipper_theme_primary");
+  localStorage.removeItem("klipper_theme_secondary");
+  applyThemeSettings();
+  showToast("🎨 Theme reset to default.");
+}
+
+applyThemeSettings();
+
 const originalInitApp = initApp;
 initApp = function() {
   originalInitApp();
+  applyThemeSettings();
   setupPullToRefresh();
+  setupTabSwipeNavigation();
   window.addEventListener("resize", () => {
     drawTempChart();
     renderExcludeObjects();
